@@ -1,3 +1,5 @@
+#include "CombatDiagnostics.h"
+#include "PrecisionDiagnostics.h"
 #include "Settings.h"
 #include "UI.h"
 
@@ -7,6 +9,11 @@ namespace
 	{
 		if (a_message->type == SKSE::MessagingInterface::kPostLoad) {
 			UI::Register();
+		} else if (a_message->type == SKSE::MessagingInterface::kPostPostLoad) {
+			PrecisionDiagnostics::Register();
+		} else if (a_message->type == SKSE::MessagingInterface::kNewGame ||
+		           a_message->type == SKSE::MessagingInterface::kPostLoadGame) {
+			SKSE::GetTaskInterface()->AddTask(CombatDiagnostics::Register);
 		}
 	}
 }
