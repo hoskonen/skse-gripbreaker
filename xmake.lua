@@ -1,3 +1,6 @@
+-- enable CommonLibSSE-NG's built-in INI support
+set_config("rex_ini", true)
+
 -- include CommonLibSSE-NG
 includes("lib/commonlibsse-ng")
 
