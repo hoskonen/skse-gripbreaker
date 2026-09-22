@@ -27,3 +27,10 @@ target("GripBreaker")
     add_headerfiles("src/**.h")
     add_includedirs("src", "lib/skse-menu-framework/include")
     set_pcxxheader("src/pch.h")
+
+-- dependency-free tests for the pure Phase 1 grip formula
+target("GripEvaluationTests")
+    set_kind("binary")
+    set_default(false)
+    add_files("tests/GripEvaluationTests.cpp", "src/GripEvaluation.cpp", "src/DisarmEvaluation.cpp")
+    add_includedirs("src")
