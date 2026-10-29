@@ -13,7 +13,11 @@ namespace
 			PrecisionDiagnostics::Register();
 		} else if (a_message->type == SKSE::MessagingInterface::kNewGame ||
 		           a_message->type == SKSE::MessagingInterface::kPostLoadGame) {
-			SKSE::GetTaskInterface()->AddTask(CombatDiagnostics::Register);
+			if (auto* taskInterface = SKSE::GetTaskInterface()) {
+				taskInterface->AddTask(CombatDiagnostics::Register);
+			} else {
+				logs::warn("Could not queue combat diagnostics registration: SKSE task interface is unavailable");
+			}
 		}
 	}
 }

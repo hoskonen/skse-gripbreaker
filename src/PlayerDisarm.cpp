@@ -24,33 +24,6 @@ namespace
 		return name && name[0] != '\0' ? name : "<unavailable>";
 	}
 
-	void LogDroppedReference(
-		const RE::ObjectRefHandle& a_handle,
-		const RE::TESObjectREFR& a_droppedReference,
-		const RE::NiPoint3& a_playerPosition)
-	{
-		const auto droppedPosition = a_droppedReference.GetPosition();
-		const auto distance = droppedPosition.GetDistance(a_playerPosition);
-		auto* parentCell = a_droppedReference.GetParentCell();
-		const auto* cellName = parentCell ? parentCell->GetName() : nullptr;
-
-		logs::info(
-			"Player drop reference: referenceFormID={:08X} handle={:08X} "
-			"playerPosition=({:.3f},{:.3f},{:.3f}) droppedPosition=({:.3f},{:.3f},{:.3f}) "
-			"distance={:.3f} parentCellFormID={:08X} parentCell=\"{}\"",
-			a_droppedReference.GetFormID(),
-			a_handle.native_handle(),
-			a_playerPosition.x,
-			a_playerPosition.y,
-			a_playerPosition.z,
-			droppedPosition.x,
-			droppedPosition.y,
-			droppedPosition.z,
-			distance,
-			parentCell ? parentCell->GetFormID() : 0,
-			cellName && cellName[0] != '\0' ? cellName : "<unavailable>");
-	}
-
 	void LogResult(
 		const PlayerDisarm::Request& a_request,
 		const Resolution& a_resolution,
@@ -187,35 +160,6 @@ namespace
 		return result;
 	}
 
-	RE::ExtraDataList* FindProcessCacheExtraForDiagnostics(
-		const Resolution& a_resolution,
-		bool a_leftHand)
-	{
-		// This pointer is displayed for comparison only. It must never be used for mutation.
-		auto* entry = a_resolution.player ? a_resolution.player->GetEquippedEntryData(a_leftHand) : nullptr;
-		if (!entry || entry->object != a_resolution.weapon || !entry->extraLists) {
-			return nullptr;
-		}
-
-		RE::ExtraDataList* match = nullptr;
-		for (auto* extraList : *entry->extraLists) {
-			if (!extraList) {
-				continue;
-			}
-
-			const auto matchesHand = a_leftHand ?
-				extraList->HasType<RE::ExtraWornLeft>() :
-				extraList->HasType<RE::ExtraWorn>();
-			if (!matchesHand) {
-				continue;
-			}
-			if (match) {
-				return nullptr;
-			}
-			match = extraList;
-		}
-		return match;
-	}
 }
 
 bool PlayerDisarm::CanDropAttackingWeapon(const Request& a_request, bool a_logResult)
@@ -227,7 +171,18 @@ bool PlayerDisarm::CanDropAttackingWeapon(const Request& a_request, bool a_logRe
 	return resolution.valid;
 }
 
-PlayerDisarm::DropResult PlayerDisarm::TryDropAttackingWeapon(const Request& a_request, bool a_logResult)
+PlayerDisarm::DropResult PlayerDisarm::TryDropAttackingWeapon(
+	const Request& a_request,
+	const bool a_applyDropPhysics,
+	const bool a_logResult)
+{
+	return TryDropAttackingWeaponDetailed(a_request, a_applyDropPhysics, a_logResult).result;
+}
+
+PlayerDisarm::DropOutcome PlayerDisarm::TryDropAttackingWeaponDetailed(
+	const Request& a_request,
+	const bool a_applyDropPhysics,
+	const bool a_logResult)
 {
 	// Resolve again immediately before mutation. Mutation pointers must originate from the
 	// authoritative InventoryChanges::entryList, never from GetEquippedEntryData().
@@ -236,15 +191,7 @@ PlayerDisarm::DropResult PlayerDisarm::TryDropAttackingWeapon(const Request& a_r
 		if (a_logResult) {
 			LogResult(a_request, resolution, "SKIPPED", resolution.reason);
 		}
-		return DropResult::kSkipped;
-	}
-
-	if (a_logResult) {
-		auto* processCacheExtra = FindProcessCacheExtraForDiagnostics(resolution, a_request.leftHand);
-		logs::info(
-			"Player disarm pointer audit: processCacheExtra={} inventoryOwnedExtra={}",
-			static_cast<const void*>(processCacheExtra),
-			static_cast<const void*>(resolution.inventoryOwnedExtra));
+		return { DropResult::kSkipped, std::string{ resolution.reason }, resolution.weaponName };
 	}
 
 	const auto dropPosition = resolution.player->GetPosition();
@@ -264,7 +211,7 @@ PlayerDisarm::DropResult PlayerDisarm::TryDropAttackingWeapon(const Request& a_r
 		if (a_logResult) {
 			LogResult(a_request, resolution, "FAILED", "remove_item_failed");
 		}
-		return DropResult::kFailed;
+		return { DropResult::kFailed, "remove_item_failed", resolution.weaponName };
 	}
 
 	const auto droppedReference = droppedHandle.get();
@@ -272,24 +219,24 @@ PlayerDisarm::DropResult PlayerDisarm::TryDropAttackingWeapon(const Request& a_r
 		if (a_logResult) {
 			LogResult(a_request, resolution, "UNVERIFIED", "dropped_reference_unresolved");
 		}
-		return DropResult::kUnverified;
+		return { DropResult::kUnverified, "dropped_reference_unresolved", resolution.weaponName };
 	}
 	if (droppedReference->GetBaseObject() != resolution.weapon) {
 		if (a_logResult) {
 			LogResult(a_request, resolution, "UNVERIFIED", "dropped_reference_base_mismatch");
 		}
-		return DropResult::kUnverified;
+		return { DropResult::kUnverified, "dropped_reference_base_mismatch", resolution.weaponName };
 	}
-
-	LogDroppedReference(droppedHandle, *droppedReference, resolution.player->GetPosition());
 
 	if (a_logResult) {
 		LogResult(a_request, resolution, "DROPPED");
 	}
 
-	DropPhysics::Queue(
-		droppedHandle,
-		a_request.expectedWeaponFormID,
-		DropPhysics::MakeTestImpulse(resolution.player->GetAngleZ()));
-	return DropResult::kDropped;
+	if (a_applyDropPhysics) {
+		DropPhysics::Queue(
+			droppedHandle,
+			a_request.expectedWeaponFormID,
+			DropPhysics::MakeTestImpulse(resolution.player->GetAngleZ()));
+	}
+	return { DropResult::kDropped, {}, resolution.weaponName };
 }

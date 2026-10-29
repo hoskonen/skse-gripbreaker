@@ -21,6 +21,15 @@ namespace
 		float w;
 	};
 
+	struct ReadinessRequest
+	{
+		RE::ObjectRefHandle droppedHandle;
+		RE::FormID expectedWeaponFormID{ 0 };
+		RE::hkVector4 impulse;
+		std::uint32_t attempt{ 1 };
+		Clock::time_point startedAt;
+	};
+
 	[[nodiscard]] VectorComponents GetComponents(const RE::hkVector4& a_vector)
 	{
 		alignas(16) float values[4];
@@ -66,72 +75,44 @@ namespace
 			a_reason);
 	}
 
-	void QueueAttempt(
-		RE::ObjectRefHandle a_droppedHandle,
-		RE::FormID a_expectedWeaponFormID,
-		RE::hkVector4 a_impulse,
-		std::uint32_t a_attempt,
-		Clock::time_point a_startedAt);
+	void QueueAttempt(ReadinessRequest a_request);
 
-	void QueueAttemptAfterDelay(
-		RE::ObjectRefHandle a_droppedHandle,
-		const RE::FormID a_expectedWeaponFormID,
-		RE::hkVector4 a_impulse,
-		const std::uint32_t a_attempt,
-		const Clock::time_point a_startedAt)
+	void QueueAttemptAfterDelay(ReadinessRequest a_request)
 	{
 		// Match the essential scheduling behavior of Seb's readiness helpers: wait
 		// off the game thread, then submit a fresh one-shot game-thread task. The
 		// detached worker owns no engine pointers and disposes itself after enqueue.
 		std::jthread(
-			[a_droppedHandle, a_expectedWeaponFormID, a_impulse, a_attempt, a_startedAt]() {
+			[request = std::move(a_request)]() mutable {
 				std::this_thread::sleep_for(kRetryDelay);
-				QueueAttempt(
-					a_droppedHandle,
-					a_expectedWeaponFormID,
-					a_impulse,
-					a_attempt,
-					a_startedAt);
+				QueueAttempt(std::move(request));
 			})
 			.detach();
 	}
 
 	void WaitOrAbandon(
-		RE::ObjectRefHandle a_droppedHandle,
-		const RE::FormID a_expectedWeaponFormID,
-		RE::hkVector4 a_impulse,
-		const std::uint32_t a_attempt,
-		const Clock::time_point a_startedAt,
+		ReadinessRequest a_request,
 		std::string_view a_reason)
 	{
-		if (a_attempt >= kMaximumAttempts) {
-			LogAbandoned(a_attempt, a_startedAt, a_reason);
+		if (a_request.attempt >= kMaximumAttempts) {
+			LogAbandoned(a_request.attempt, a_request.startedAt, a_reason);
 			return;
 		}
 
 		logs::info(
 			"Drop physics: attempt={} elapsed={}ms result=WAIT reason={}",
-			a_attempt,
-			GetElapsedMilliseconds(a_startedAt),
+			a_request.attempt,
+			GetElapsedMilliseconds(a_request.startedAt),
 			a_reason);
-		QueueAttemptAfterDelay(
-			a_droppedHandle,
-			a_expectedWeaponFormID,
-			a_impulse,
-			a_attempt + 1,
-			a_startedAt);
+		++a_request.attempt;
+		QueueAttemptAfterDelay(std::move(a_request));
 	}
 
-	void QueueAttempt(
-		RE::ObjectRefHandle a_droppedHandle,
-		const RE::FormID a_expectedWeaponFormID,
-		RE::hkVector4 a_impulse,
-		const std::uint32_t a_attempt,
-		const Clock::time_point a_startedAt)
+	void QueueAttempt(ReadinessRequest a_request)
 	{
 		auto* taskInterface = SKSE::GetTaskInterface();
 		if (!taskInterface) {
-			LogAbandoned(a_attempt, a_startedAt, "task_interface_unavailable");
+			LogAbandoned(a_request.attempt, a_request.startedAt, "task_interface_unavailable");
 			return;
 		}
 
@@ -139,41 +120,39 @@ namespace
 		// copied impulse, and bounded readiness timing/counter state. All engine
 		// pointers are task-local.
 		taskInterface->AddTask(
-			[a_droppedHandle, a_expectedWeaponFormID, a_impulse, a_attempt, a_startedAt]() {
-				if (!IsFiniteNonZeroImpulse(a_impulse)) {
-					LogAbandoned(a_attempt, a_startedAt, "invalid_impulse");
+			[request = std::move(a_request)]() mutable {
+				if (!IsFiniteNonZeroImpulse(request.impulse)) {
+					LogAbandoned(request.attempt, request.startedAt, "invalid_impulse");
 					return;
 				}
-				if (Clock::now() - a_startedAt > kMaximumReadinessLifetime) {
-					LogAbandoned(a_attempt, a_startedAt, "timeout");
+				if (Clock::now() - request.startedAt > kMaximumReadinessLifetime) {
+					LogAbandoned(request.attempt, request.startedAt, "timeout");
 					return;
 				}
 
 				// Resolve the handle afresh on every attempt. No reference, scene graph,
 				// collision, or Havok pointer survives this task invocation.
-				const auto droppedReference = a_droppedHandle.get();
+				const auto droppedReference = request.droppedHandle.get();
 				if (!droppedReference) {
-					LogAbandoned(a_attempt, a_startedAt, "handle_expired");
+					LogAbandoned(request.attempt, request.startedAt, "handle_expired");
 					return;
 				}
 
 				auto* baseObject = droppedReference->GetBaseObject();
-				if (!baseObject || baseObject->GetFormID() != a_expectedWeaponFormID ||
+				if (!baseObject || baseObject->GetFormID() != request.expectedWeaponFormID ||
 					!baseObject->As<RE::TESObjectWEAP>()) {
-					LogAbandoned(a_attempt, a_startedAt, "weapon_mismatch");
+					LogAbandoned(request.attempt, request.startedAt, "weapon_mismatch");
 					return;
 				}
 
 				if (!droppedReference->Is3DLoaded()) {
-					WaitOrAbandon(
-						a_droppedHandle, a_expectedWeaponFormID, a_impulse, a_attempt, a_startedAt, "no_3d");
+					WaitOrAbandon(std::move(request), "no_3d");
 					return;
 				}
 
 				auto* object3D = droppedReference->Get3D();
 				if (!object3D) {
-					WaitOrAbandon(
-						a_droppedHandle, a_expectedWeaponFormID, a_impulse, a_attempt, a_startedAt, "no_3d");
+					WaitOrAbandon(std::move(request), "no_3d");
 					return;
 				}
 
@@ -183,31 +162,27 @@ namespace
 				};
 				auto* hkpRigidBody = bhkRigidBody ? bhkRigidBody->GetRigidBody() : nullptr;
 				if (!hkpRigidBody) {
-					WaitOrAbandon(
-						a_droppedHandle, a_expectedWeaponFormID, a_impulse, a_attempt, a_startedAt, "no_rigid_body");
+					WaitOrAbandon(std::move(request), "no_rigid_body");
 					return;
 				}
 				if (!hkpRigidBody->world) {
-					WaitOrAbandon(
-						a_droppedHandle, a_expectedWeaponFormID, a_impulse, a_attempt, a_startedAt, "body_not_in_world");
+					WaitOrAbandon(std::move(request), "body_not_in_world");
 					return;
 				}
 
 				const auto mass = hkpRigidBody->motion.GetMass();
 				if (!std::isfinite(mass) || mass <= 0.0f) {
-					WaitOrAbandon(
-						a_droppedHandle, a_expectedWeaponFormID, a_impulse, a_attempt, a_startedAt, "invalid_mass");
+					WaitOrAbandon(std::move(request), "invalid_mass");
 					return;
 				}
 				if (!IsDynamicMotion(hkpRigidBody->motion.type.get())) {
-					WaitOrAbandon(
-						a_droppedHandle, a_expectedWeaponFormID, a_impulse, a_attempt, a_startedAt, "body_not_dynamic");
+					WaitOrAbandon(std::move(request), "body_not_dynamic");
 					return;
 				}
 
-				hkpRigidBody->ApplyLinearImpulse(a_impulse);
+				hkpRigidBody->ApplyLinearImpulse(request.impulse);
 
-				const auto [x, y, z, w] = GetComponents(a_impulse);
+				const auto [x, y, z, w] = GetComponents(request.impulse);
 				(void)w;
 				const auto impulseMagnitude = std::sqrt(x * x + y * y + z * z);
 				logs::info(
@@ -238,5 +213,5 @@ void DropPhysics::Queue(
 	const RE::FormID a_expectedWeaponFormID,
 	RE::hkVector4 a_impulse)
 {
-	QueueAttempt(a_droppedHandle, a_expectedWeaponFormID, a_impulse, 1, Clock::now());
+	QueueAttempt({ a_droppedHandle, a_expectedWeaponFormID, a_impulse, 1, Clock::now() });
 }

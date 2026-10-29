@@ -1,11 +1,12 @@
 #include "CombatDiagnostics.h"
 
+#include "ActorValueUtils.h"
+#include "CombatContextUtils.h"
 #include "DisarmEvaluation.h"
 #include "GripEvaluation.h"
 #include "PlayerDisarm.h"
+#include "RandomRoll.h"
 #include "Settings.h"
-
-#include <random>
 
 namespace
 {
@@ -45,52 +46,6 @@ namespace
 
 	AttackBoundaryState attackBoundaryState;
 
-	std::string_view GetWeaponTypeName(const RE::TESObjectWEAP* a_weapon)
-	{
-		if (!a_weapon) {
-			return "Unarmed";
-		}
-
-		switch (a_weapon->GetWeaponType()) {
-		case RE::WEAPON_TYPE::kHandToHandMelee:
-			return "HandToHand";
-		case RE::WEAPON_TYPE::kOneHandSword:
-			return "OneHandSword";
-		case RE::WEAPON_TYPE::kOneHandDagger:
-			return "OneHandDagger";
-		case RE::WEAPON_TYPE::kOneHandAxe:
-			return "OneHandAxe";
-		case RE::WEAPON_TYPE::kOneHandMace:
-			return "OneHandMace";
-		case RE::WEAPON_TYPE::kTwoHandSword:
-			return "TwoHandSword";
-		case RE::WEAPON_TYPE::kTwoHandAxe:
-			return "TwoHandAxe";
-		case RE::WEAPON_TYPE::kBow:
-			return "Bow";
-		case RE::WEAPON_TYPE::kStaff:
-			return "Staff";
-		case RE::WEAPON_TYPE::kCrossbow:
-			return "Crossbow";
-		default:
-			return "Unknown";
-		}
-	}
-
-	std::string_view GetActorValueName(RE::ActorValue a_actorValue)
-	{
-		switch (a_actorValue) {
-		case RE::ActorValue::kOneHanded:
-			return "OneHanded";
-		case RE::ActorValue::kTwoHanded:
-			return "TwoHanded";
-		case RE::ActorValue::kBlock:
-			return "Block";
-		default:
-			return "Unavailable";
-		}
-	}
-
 	RE::ActorValue GetRelevantSkill(const AttackDetails& a_details)
 	{
 		if (a_details.bash) {
@@ -102,19 +57,7 @@ namespace
 			return RE::ActorValue::kBlock;
 		}
 
-		if (!a_details.weapon) {
-			return RE::ActorValue::kNone;
-		}
-
-		const auto skill = a_details.weapon->weaponData.skill.get();
-		switch (skill) {
-		case RE::ActorValue::kOneHanded:
-		case RE::ActorValue::kTwoHanded:
-		case RE::ActorValue::kBlock:
-			return skill;
-		default:
-			return RE::ActorValue::kNone;
-		}
+		return CombatContextUtils::RelevantWeaponSkill(a_details.weapon);
 	}
 
 	GripEvaluation::SkillType GetGripSkillType(RE::ActorValue a_actorValue)
@@ -131,42 +74,6 @@ namespace
 		}
 	}
 
-	std::optional<float> ReadActorValue(const RE::Actor* a_actor, RE::ActorValue a_actorValue)
-	{
-		if (!a_actor || a_actorValue == RE::ActorValue::kNone) {
-			return std::nullopt;
-		}
-
-		const auto* actorValueOwner = a_actor->AsActorValueOwner();
-		if (!actorValueOwner) {
-			return std::nullopt;
-		}
-
-		const auto value = actorValueOwner->GetActorValue(a_actorValue);
-		return std::isfinite(value) ? std::optional<float>{ value } : std::nullopt;
-	}
-
-	std::optional<float> GetStaminaPercent(const RE::Actor* a_actor)
-	{
-		if (!a_actor) {
-			return std::nullopt;
-		}
-
-		const auto* actorValueOwner = a_actor->AsActorValueOwner();
-		if (!actorValueOwner) {
-			return std::nullopt;
-		}
-
-		const auto current = actorValueOwner->GetActorValue(RE::ActorValue::kStamina);
-		const auto maximum = actorValueOwner->GetPermanentActorValue(RE::ActorValue::kStamina) +
-		                     a_actor->GetActorValueModifier(RE::ACTOR_VALUE_MODIFIER::kTemporary, RE::ActorValue::kStamina);
-		if (!std::isfinite(current) || !std::isfinite(maximum) || maximum <= 0.0f) {
-			return std::nullopt;
-		}
-
-		return std::clamp((current / maximum) * 100.0f, 0.0f, 100.0f);
-	}
-
 	AttackBoundaryState::StartSnapshot CaptureAttackStartSnapshot(
 		const RE::PlayerCharacter* a_player,
 		std::string_view a_eventName)
@@ -174,7 +81,7 @@ namespace
 		AttackBoundaryState::StartSnapshot snapshot;
 		snapshot.attempted = true;
 		snapshot.boundary = a_eventName;
-		snapshot.staminaPercent = GetStaminaPercent(a_player);
+		snapshot.staminaPercent = ActorValueUtils::ReadStaminaPercent(a_player);
 		if (a_eventName == kLeftSwingEvent) {
 			snapshot.inferredLeftHand = true;
 		} else if (a_eventName == kRightSwingEvent) {
@@ -249,12 +156,6 @@ namespace
 	bool IsMeleeAttack(const AttackDetails& a_details)
 	{
 		return a_details.bash || !a_details.attackingForm || (a_details.weapon && a_details.weapon->IsMelee());
-	}
-
-	float RollPercent()
-	{
-		static std::mt19937 generator{ std::random_device{}() };
-		return std::generate_canonical<float, 24>(generator) * 100.0f;
 	}
 
 	void LogAttackStaminaTiming(
@@ -357,12 +258,15 @@ namespace
 		const auto* name = a_details.attackingForm ? a_details.attackingForm->GetName() : nullptr;
 		const auto weaponName = name && name[0] != '\0' ? std::string_view{ name } : std::string_view{ "<unarmed>" };
 		const auto* armor = a_details.attackingForm ? a_details.attackingForm->As<RE::TESObjectARMO>() : nullptr;
-		const auto weaponType = armor && armor->IsShield() ? std::string_view{ "Shield" } : GetWeaponTypeName(a_details.weapon);
+		const auto weaponType = armor && armor->IsShield() ?
+			std::string_view{ "Shield" } :
+			(a_details.weapon ? CombatContextUtils::WeaponTypeName(a_details.weapon) : std::string_view{ "Unarmed" });
 		const auto skill = GetRelevantSkill(a_details);
-		const auto skillValue = ReadActorValue(a_player, skill);
-		const auto skillName = skillValue ? GetActorValueName(skill) : std::string_view{ "Unavailable" };
+		const auto skillValue = ActorValueUtils::Read(a_player, skill);
+		const auto skillName = skillValue ?
+			CombatContextUtils::ActorValueName(skill) : std::string_view{ "Unavailable" };
 		const auto skillValueText = skillValue ? std::format("{:.1f}", *skillValue) : std::string{ "Unavailable" };
-		const auto staminaPercent = GetStaminaPercent(a_player);
+		const auto staminaPercent = ActorValueUtils::ReadStaminaPercent(a_player);
 		const auto staminaText = staminaPercent ? std::format("{:.1f}%", *staminaPercent) : std::string{ "Unavailable" };
 		const auto formID = a_details.attackingForm ? a_details.attackingForm->GetFormID() : 0;
 		const auto* attackDataEvent = a_details.attackData ? a_details.attackData->event.c_str() : nullptr;
@@ -429,7 +333,8 @@ namespace
 				evaluation.fatigueRisk);
 		}
 
-		if (!settings.enabled || evaluation.fatigueRisk <= 0.0f || !a_details.weapon) {
+		if (!settings.enabled || !settings.fatigueDisarms ||
+		    evaluation.fatigueRisk <= 0.0f || !a_details.weapon) {
 			return;
 		}
 
@@ -441,7 +346,7 @@ namespace
 		const auto disarm = DisarmEvaluation::Evaluate(
 			evaluation.fatigueRisk,
 			static_cast<float>(settings.baseDropChance));
-		const auto roll = RollPercent();
+		const auto roll = RandomRoll::Percent();
 		const auto shouldDrop = roll < disarm.dropChancePercent;
 		if (settings.debugLogging) {
 			logs::info(
@@ -459,7 +364,8 @@ namespace
 			return;
 		}
 
-		(void)PlayerDisarm::TryDropAttackingWeapon(dropRequest, settings.debugLogging);
+		(void)PlayerDisarm::TryDropAttackingWeapon(
+			dropRequest, settings.dropPhysics, settings.debugLogging);
 	}
 
 	void InspectPlayerAnimationEvent(std::string a_eventName)

@@ -34,3 +34,61 @@ target("GripEvaluationTests")
     set_default(false)
     add_files("tests/GripEvaluationTests.cpp", "src/GripEvaluation.cpp", "src/DisarmEvaluation.cpp")
     add_includedirs("src")
+
+-- dependency-free tests for logical-clash weapon mass evaluation
+target("MassMatchupEvaluationTests")
+    set_kind("binary")
+    set_default(false)
+    add_files("tests/MassMatchupEvaluationTests.cpp", "src/MassMatchupEvaluation.cpp")
+    add_includedirs("src")
+
+-- dependency-free tests for logical-clash grip configuration evaluation
+target("GripConfigurationEvaluationTests")
+    set_kind("binary")
+    set_default(false)
+    add_files("tests/GripConfigurationEvaluationTests.cpp", "src/GripConfigurationEvaluation.cpp")
+    add_includedirs("src")
+
+-- dependency-free tests for logical-clash stamina grip evaluation
+target("StaminaGripEvaluationTests")
+    set_kind("binary")
+    set_default(false)
+    add_files("tests/StaminaGripEvaluationTests.cpp", "src/StaminaGripEvaluation.cpp")
+    add_includedirs("src")
+
+-- dependency-free tests for logical-clash weapon skill grip evaluation
+target("SkillGripEvaluationTests")
+    set_kind("binary")
+    set_default(false)
+    add_files(
+        "tests/SkillGripEvaluationTests.cpp",
+        "src/GripConfigurationEvaluation.cpp",
+        "src/SkillGripEvaluation.cpp",
+        "src/StaminaGripEvaluation.cpp"
+    )
+    add_includedirs("src")
+
+-- dependency-free tests for directional logical-clash severity evaluation
+target("ClashSeverityEvaluationTests")
+    set_kind("binary")
+    set_default(false)
+    add_files("tests/ClashSeverityEvaluationTests.cpp", "src/ClashSeverityEvaluation.cpp")
+    add_includedirs("src")
+
+-- dependency-free tests for canonical clash probability estimates
+target("ClashProbabilityEvaluationTests")
+    set_kind("binary")
+    set_default(false)
+    add_files(
+        "tests/ClashProbabilityEvaluationTests.cpp",
+        "src/ClashProbabilityEvaluation.cpp",
+        "src/ClashSeverityEvaluation.cpp"
+    )
+    add_includedirs("src")
+
+-- deterministic decisions and RNG invocation count, without Skyrim dependencies
+target("ClashDisarmDecisionTests")
+    set_kind("binary")
+    set_default(false)
+    add_files("tests/ClashDisarmDecisionTests.cpp", "src/ClashDisarmDecision.cpp")
+    add_includedirs("src")

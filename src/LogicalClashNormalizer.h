@@ -11,12 +11,7 @@ namespace LogicalClashNormalizer
 
 	struct Participant
 	{
-		std::uint32_t actorHandle{ 0 };
-		RE::FormID actorFormID{ 0 };
-		RE::FormID weaponFormID{ 0 };
-		Hand hand{ Hand::kUnknown };
-		std::string actorName;
-		std::string weaponName;
+		RE::ActorHandle actorHandle;
 	};
 
 	struct CollisionSample
@@ -26,6 +21,8 @@ namespace LogicalClashNormalizer
 		RE::NiPoint3 position;
 		RE::NiPoint3 hitPointVelocity;
 		std::chrono::steady_clock::time_point collisionTime;
+		bool logDiagnostics{ false };
+		bool requestClashDisarm{ false };
 	};
 
 	void Record(CollisionSample a_sample);

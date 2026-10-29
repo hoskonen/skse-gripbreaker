@@ -6,35 +6,6 @@
 
 namespace
 {
-	constexpr std::string_view kUnavailable = "<unavailable>";
-
-	std::string_view GetReferenceName(const RE::TESObjectREFR* a_reference)
-	{
-		if (!a_reference) {
-			return kUnavailable;
-		}
-
-		const auto* name = a_reference->GetName();
-		return name && name[0] != '\0' ? std::string_view{ name } : kUnavailable;
-	}
-
-	std::string CopyReferenceName(const RE::TESObjectREFR* a_reference)
-	{
-		return std::string{ GetReferenceName(a_reference) };
-	}
-
-	LogicalClashNormalizer::Participant MakeParticipant(RE::Actor* a_actor)
-	{
-		return {
-			a_actor ? a_actor->GetHandle().native_handle() : 0,
-			a_actor ? a_actor->GetFormID() : 0,
-			0,
-			LogicalClashNormalizer::Hand::kUnknown,
-			CopyReferenceName(a_actor),
-			std::string{ kUnavailable }
-		};
-	}
-
 	PRECISION_API::WeaponCollisionCallbackReturn OnWeaponWeaponCollision(
 		const PRECISION_API::PrecisionHitData& a_hitData)
 	{
@@ -42,7 +13,10 @@ namespace
 		PRECISION_API::WeaponCollisionCallbackReturn result;
 		result.bIgnoreHit = false;
 
-		if (!Settings::Get().debugLogging) {
+		const auto& settings = Settings::Get();
+		const auto logDiagnostics = settings.debugLogging;
+		const auto normalizeForClashDisarm = settings.enabled && settings.clashDisarms;
+		if (!logDiagnostics && !normalizeForClashDisarm) {
 			return result;
 		}
 
@@ -53,36 +27,40 @@ namespace
 		const auto collisionTimestampMs =
 			std::chrono::duration_cast<std::chrono::milliseconds>(collisionTime.time_since_epoch()).count();
 
-		logs::info(
-			"Precision weapon collision: collisionTimestampMs={} attacker=\"{}\" attackerFormID={:08X} attackerWeapon=<deferred> "
-			"target=\"{}\" targetFormID={:08X} targetWeapon=<deferred> "
-			"position=({:.3f}, {:.3f}, {:.3f}) velocity=({:.3f}, {:.3f}, {:.3f}) normal=({:.3f}, {:.3f}, {:.3f}) "
-			"hittingBody={} hittingShapeKey=0x{:08X} hitBody={} hitShapeKey=0x{:08X}",
-			collisionTimestampMs,
-			GetReferenceName(attacker),
-			attacker ? attacker->GetFormID() : 0,
-			GetReferenceName(target),
-			target ? target->GetFormID() : 0,
-			a_hitData.hitPos.x,
-			a_hitData.hitPos.y,
-			a_hitData.hitPos.z,
-			a_hitData.hitPointVelocity.x,
-			a_hitData.hitPointVelocity.y,
-			a_hitData.hitPointVelocity.z,
-			a_hitData.separatingNormal.x,
-			a_hitData.separatingNormal.y,
-			a_hitData.separatingNormal.z,
-			static_cast<const void*>(a_hitData.hittingRigidBody),
-			static_cast<std::uint32_t>(a_hitData.hittingBodyShapeKey),
-			static_cast<const void*>(a_hitData.hitRigidBody),
-			static_cast<std::uint32_t>(a_hitData.hitBodyShapeKey));
+		const auto attackerHandle = attacker ? attacker->GetHandle() : RE::ActorHandle{};
+		const auto targetHandle = targetActor ? targetActor->GetHandle() : RE::ActorHandle{};
+		if (logDiagnostics) {
+			logs::info(
+				"Precision weapon collision: collisionTimestampMs={} attackerHandle=0x{:08X} "
+				"targetHandle=0x{:08X} "
+				"position=({:.3f}, {:.3f}, {:.3f}) velocity=({:.3f}, {:.3f}, {:.3f}) normal=({:.3f}, {:.3f}, {:.3f}) "
+				"hittingBody={} hittingShapeKey=0x{:08X} hitBody={} hitShapeKey=0x{:08X}",
+				collisionTimestampMs,
+				attackerHandle.native_handle(),
+				targetHandle.native_handle(),
+				a_hitData.hitPos.x,
+				a_hitData.hitPos.y,
+				a_hitData.hitPos.z,
+				a_hitData.hitPointVelocity.x,
+				a_hitData.hitPointVelocity.y,
+				a_hitData.hitPointVelocity.z,
+				a_hitData.separatingNormal.x,
+				a_hitData.separatingNormal.y,
+				a_hitData.separatingNormal.z,
+				static_cast<const void*>(a_hitData.hittingRigidBody),
+				static_cast<std::uint32_t>(a_hitData.hittingBodyShapeKey),
+				static_cast<const void*>(a_hitData.hitRigidBody),
+				static_cast<std::uint32_t>(a_hitData.hitBodyShapeKey));
+		}
 
 		LogicalClashNormalizer::Record({
-			MakeParticipant(attacker),
-			MakeParticipant(targetActor),
+			{ attackerHandle },
+			{ targetHandle },
 			a_hitData.hitPos,
 			a_hitData.hitPointVelocity,
-			collisionTime
+			collisionTime,
+			logDiagnostics,
+			normalizeForClashDisarm
 		});
 
 		return result;

@@ -210,11 +210,46 @@ grip model.
 
 Build incrementally.
 
-Current implementation target:
-Phase 1 player-only fatigue disarm prototype. Precision logical clashes remain
-diagnostic-only and are not connected to this probability or drop path.
+The player-only fatigue disarm path and the player clash disarm path have
+independent toggles. Completed Precision logical clashes now use the canonical
+player-side severity probability to gate the established safe player drop path.
+NPC probabilities remain diagnostic only.
 
 ## Disarm Probability
+
+### Player clash probability
+
+Completed player-involved clashes calculate a probability for each participant
+after the severity evaluation. The canonical Hill curve is:
+
+```text
+chancePercent = 95 / (1 + (1.85 / severity)^2.8)
+chancePercent(0) = 0
+```
+
+The internal constants are centralized in `ClashProbabilityEvaluation::Curve`.
+Severity 1.85 gives half the maximum (47.5%). The curve is monotonic and approaches
+95%, so no severity implies a guaranteed drop. Floating-point rounding may reach
+the 95% cap for extreme inputs, but never 100%.
+
+Example estimates: severity 0.5 -> 2.4%, 0.75 -> 7.0%, 1 -> 14.4%,
+1.25 -> 23.8%, 1.5 -> 33.9%, 2 -> 52.7%, 3 -> 75.5%, 5 -> 89.5%,
+8 -> 93.5%. Missing, negative, or non-finite severity is unavailable.
+
+The probability calculation uses copied severity data only. Once a logical clash
+finishes its existing 75 ms quiet window, enabled player clash disarms queue one
+game-thread decision. Valid player severity and probability, actor context, and
+captured weapon/hand identity are required before drawing a fresh roll in [0, 100).
+Only `roll < playerChancePercent` permits the existing guarded `PlayerDisarm`
+operation. Equality means KEEP. Invalid input means SKIPPED with no random roll.
+KEEP never calls the inventory/drop path or schedules drop physics. DROP still
+requires the existing live weapon and exact worn inventory instance validation.
+
+The temporary forced player clash-drop branch has been replaced. There is one
+player roll per eligible completed logical clash and no NPC roll. The fatigue
+path draws its own independent rolls using the same percentage RNG method.
+No frequency adjustment or probability tuning setting is introduced; the
+canonical probability remains separate from the deterministic roll decision.
 
 Grip/fatigue risk is not itself the final probability of disarming.
 
